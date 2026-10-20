@@ -6,11 +6,13 @@ Created on Wed Oct 14 09:39:30 2026
 
 Modified 2026-10-19 for beamtime_20261019 (based on
 https://github.com/autlee17/AWG/blob/main/binary_AL_arbitrary_burst_PUND_latency.py):
-the standard trapezoidal PUND is replaced by the Bayesian-optimized waveform
-from BO_pund_rise_BTO_F9_1737_rise_points8_rep1 (evaluation 223 = BO step 193,
-the lowest-Work protocol with delta_P >= P_target). Every modified block is
-tagged "CHANGED (beamtime_20261019)"; everything else (triggered burst,
-zero padding, trigger margin, binary upload) is unchanged.
+the full Reset-P-U-N-D sequence is kept, but the linear rise ramps of the two
+positive pulses (P and U) are replaced by the Bayesian-optimized rise from
+BO_pund_rise_BTO_F9_1737_rise_points8_rep1 (evaluation 223 = BO step 193, the
+lowest-Work protocol with delta_P >= P_target), exactly as in the local BO
+measurement. Every modified block is tagged "CHANGED (beamtime_20261019)";
+everything else (triggered burst, zero padding, trigger margin, binary
+upload) is unchanged.
 """
 
 import numpy as np
@@ -24,25 +26,21 @@ SEND_TO_INSTRUMENT = False  # Set to False to only plot, True to send to Agilent
 SHOW_PLOT = True            # Set to True to display plot in Spyder
 
 # ---------------------------------------------------------------------------
-# CHANGED (beamtime_20261019): PUND parameters replaced by the BO-optimal
-# waveform. Source run:
+# CHANGED (beamtime_20261019): BO-optimal rise for the P and U pulses.
+# Source run:
 #   D:\Ferroelectric_BTO_optimization\20260921\rise_points_scan\
 #   BO_pund_rise_BTO_F9_1737_rise_points8_rep1\bo_history_20260921_173722_480265.csv
 #   evaluation 223 (BO step 193), device BTO_F9
 #   Work = 1.6485e-11 J (Work_NORM = 0.834, i.e. 16.6% below the linear rise)
 #   delta_P = 0.169057 C/m^2 >= P_target = 0.169042 C/m^2 (feasible)
 #
-# The sequence reproduces the BO measurement waveform (waveform.py in
-# Ferroelectric_PUND_trigger_sync_BO_useful) in physical volts:
-#   pre-baseline -> reset (linear ramps) -> gap1 -> P (optimized rise ->
-#   flat top -> linear fall) -> gap2 -> U (identical optimized pulse) ->
-#   post-baseline
-# There are no N/D pulses. The optimized part is only the 1 us rise of the
-# positive pulse(s): 8 knot voltages, linearly interpolated onto this
-# script's sample grid.
+# The 8 knot voltages span the pos_rise_time rise and are linearly
+# interpolated onto this script's sample grid (same knot times as
+# waveform.build_shaped_rise in Ferroelectric_PUND_trigger_sync_BO_useful).
+# As in the local measurement, the rise goes directly into the flat top at
+# pos_amplitude with no forced continuity, and the fall stays linear.
 # ---------------------------------------------------------------------------
-# BO-optimal rise knots (commanded volts, V0 ... V7), evaluation 223
-opt_rise_knots_v = np.array([
+opt_rise_knots_v = np.array([   # commanded volts, V0 ... V7
     0.3932343312209508,
     0.147990189262185,
     0.1849243462729037,
@@ -52,40 +50,50 @@ opt_rise_knots_v = np.array([
     0.3525412100597109,
     0.5243521159906094,
 ])
-opt_rise_time = 1e-6           # s, duration of the optimized rise
 bo_sample_rate_hz = 50e6       # sample rate used during BO; sets the knot time grid
 
-# Positive (optimized) pulse: flat top and linear fall, as during BO
-pos_amplitude = 0.5            # V, flat-top level (independent of the last knot)
-pos_width = 2e-6               # s, flat-top duration
-pos_fall_time = 1e-6           # s
+# -----------------------------
+# User-editable PUND parameters
+# -----------------------------
+# CHANGED (beamtime_20261019): reset / P / U values match the local BO
+# measurement (the optimized rise is only valid for these). N / D mirror the
+# reset amplitude and the P / U timing.
+# Reset pulse (negative)
+reset_amplitude = -0.5         # V      (was -2.0)
+reset_width = 4000e-9          # s      (was 1000e-9)
+reset_rise_time = 1000e-9      # s      (was 20e-9)
 
-# Reset pulse (negative): ramps of reset_rise_time, flat for 2 * pos_width
-reset_amplitude = -0.5         # V
-reset_width = 2 * pos_width    # s (4 us, as in BO)
-reset_rise_time = 1e-6         # s
+# Positive pulses (P, U): optimized rise of pos_rise_time, linear fall of pos_rise_time
+pos_amplitude = 0.5            # V      (was 1), flat-top level
+pos_width = 2000e-9            # s      (was 500e-9)
+pos_rise_time = 1000e-9        # s      (was 20e-9), duration of the optimized rise and of the fall
 
-# Gaps / baselines, as during BO
-pre_baseline = 2e-6            # s
-gap_after_reset = 1e-6         # s (BO gap1)
-gap_between_pos = 1e-6         # s (BO gap2)
-post_baseline = 2e-6           # s
+# Negative pulses (N, D): linear ramps, unchanged shape
+neg_amplitude = -0.5           # V      (was -1.5)
+neg_width = 2000e-9            # s      (was 500e-9)
+neg_rise_time = 1000e-9        # s      (was 20e-9)
 
-# True: P + U (identical optimized pulses, exactly as measured during BO).
-# False: reset + a single optimized switching pulse only.
-include_second_pulse = True
+# Gaps
+gap_after_reset = 1000e-9      # s      (was 500e-9)
+gap_between_pos = 1000e-9      # s      (was 500e-9)
+gap_pos_to_neg = 1000e-9       # s      (was 500e-9)
+gap_between_neg = 1000e-9      # s      (was 500e-9)
+
+# Holds
+init_hold = 50e-9              # s
+final_hold = 50e-9             # s
 
 # Repetition control
-num_pund_repeats = 5           # Number of times the optimized sequence repeats per trigger
+num_pund_repeats = 5           # Number of times PUND repeats per trigger
 target_period = 1/60           # External trigger period (60 Hz = 16.67 ms)
 trigger_margin = 1e-3          # NEW: 1 ms of slack for latency, re-arm, and jitter
 
-# Gap between sequence repetitions (if multiple sequences per trigger)
+# Gap between PUND repetitions (if multiple PUNDs per trigger)
 gap_between_punds = 100e-6     # s (only used if num_pund_repeats > 1)
 
-# CHANGED (beamtime_20261019): was 0.2 V. The BO waveform idled at 0 V, and a
-# nonzero offset would shift every voltage seen by the device (reset, rise
-# knots and flat top), so the optimized protocol would no longer apply.
+# CHANGED (beamtime_20261019): was 0.2 V. The local measurement idled at 0 V,
+# and a nonzero offset would shift every voltage seen by the device
+# (including the optimized rise knots).
 voltage_offset_v = 0.0
 
 # System parameters
@@ -138,68 +146,69 @@ def pulse(amplitude, width_s, rise_time_s, sample_rate):
 
 
 # CHANGED (beamtime_20261019): new function. Interpolates the BO knots onto
-# this script's sample grid.
-def optimized_rise(sample_rate):
+# the AWG sample grid.
+def optimized_rise(rise_time_s, sample_rate):
     """Linearly interpolate the BO rise knots onto the AWG sample grid.
 
-    Knot times match waveform.build_shaped_rise in the BO code: the knots are
-    evenly spaced from the first to the last *BO* sample of the rise, i.e.
-    0 ... opt_rise_time - 1/bo_sample_rate_hz. Samples after the last knot
-    hold its value, so the continuous shape is the same as during BO,
-    independent of arb_sample_rate_hz.
+    Knot times match waveform.build_shaped_rise in the BO code: evenly spaced
+    from the first to the last *BO* sample of the rise, i.e.
+    0 ... rise_time_s - 1/bo_sample_rate_hz. Samples after the last knot hold
+    its value, so the shape is the same as during BO for any sample rate.
     """
-    point_count = int(round(opt_rise_time * sample_rate))
+    point_count = int(round(rise_time_s * sample_rate))
     sample_t = np.arange(point_count) / sample_rate
-    knot_t = np.linspace(0.0, opt_rise_time - 1.0 / bo_sample_rate_hz, opt_rise_knots_v.size)
+    knot_t = np.linspace(0.0, rise_time_s - 1.0 / bo_sample_rate_hz, opt_rise_knots_v.size)
     return np.interp(sample_t, knot_t, opt_rise_knots_v)
 
 
-# CHANGED (beamtime_20261019): new function (replaces the symmetric pulse()
-# for the positive pulses).
-def optimized_pulse(sample_rate):
-    """Optimized rise -> flat top at pos_amplitude -> linear fall to 0 V.
+# CHANGED (beamtime_20261019): new function, used for P and U instead of pulse().
+def optimized_pulse(amplitude, width_s, rise_time_s, sample_rate):
+    """Optimized rise -> flat top at amplitude -> linear fall to 0 V.
 
-    As in the BO code, the rise is concatenated directly into the flat top
-    with no forced continuity (last knot 0.524 V, flat top 0.5 V).
+    As in the local BO measurement, the rise is concatenated directly into the
+    flat top with no forced continuity (last knot 0.524 V, flat top 0.5 V).
     """
     return np.concatenate((
-        optimized_rise(sample_rate),
-        segment(pos_amplitude, pos_width, sample_rate),
-        ramp(pos_amplitude, 0.0, pos_fall_time, sample_rate),
+        optimized_rise(rise_time_s, sample_rate),
+        segment(amplitude, width_s, sample_rate),
+        ramp(amplitude, 0.0, rise_time_s, sample_rate),
     ))
 
 
-# CHANGED (beamtime_20261019): body rewritten. Builds the BO-optimal sequence
-# instead of P-U-N-D (name kept so the rest of the script is unchanged).
 def build_single_pund():
-    """Build a single optimized sequence (without zero padding)."""
-    positive_pulse = optimized_pulse(arb_sample_rate_hz)
-    parts = [
-        segment(0.0, pre_baseline, arb_sample_rate_hz),                       # Pre-baseline
+    """Build a single PUND sequence (without zero padding)."""
+    # CHANGED (beamtime_20261019): the sequence is built in volts and then
+    # normalized by its actual peak, because the optimized rise overshoots
+    # the flat top (0.524 V > pos_amplitude).
+    single_pund_v = np.concatenate((
+        segment(0.0, init_hold, arb_sample_rate_hz),                          # Initial hold
+
         pulse(reset_amplitude, reset_width, reset_rise_time, arb_sample_rate_hz),  # Reset
         segment(0.0, gap_after_reset, arb_sample_rate_hz),
-        positive_pulse,                                                       # P (optimized)
-    ]
-    if include_second_pulse:
-        parts += [
-            segment(0.0, gap_between_pos, arb_sample_rate_hz),
-            positive_pulse,                                                   # U (optimized)
-        ]
-    parts.append(segment(0.0, post_baseline, arb_sample_rate_hz))             # Post-baseline
-    single_pund_v = np.concatenate(parts)
 
-    # Normalize to the -1 to +1 range. The rise overshoots the flat top
-    # (0.524 V > 0.5 V), so use the waveform's actual peak, not the
-    # pulse amplitudes.
+        optimized_pulse(pos_amplitude, pos_width, pos_rise_time, arb_sample_rate_hz),  # P (CHANGED: optimized rise)
+        segment(0.0, gap_between_pos, arb_sample_rate_hz),
+
+        optimized_pulse(pos_amplitude, pos_width, pos_rise_time, arb_sample_rate_hz),  # U (CHANGED: optimized rise)
+        segment(0.0, gap_pos_to_neg, arb_sample_rate_hz),
+
+        pulse(neg_amplitude, neg_width, neg_rise_time, arb_sample_rate_hz),   # N
+        segment(0.0, gap_between_neg, arb_sample_rate_hz),
+
+        pulse(neg_amplitude, neg_width, neg_rise_time, arb_sample_rate_hz),   # D
+
+        segment(0.0, final_hold, arb_sample_rate_hz),                         # Final hold
+    ))
+
+    # Normalize all amplitudes to -1 to +1 range
     max_amplitude = float(np.max(np.abs(single_pund_v)))
     single_pund = single_pund_v / max_amplitude
 
-    positive_pulse_duration = opt_rise_time + pos_width + pos_fall_time
-    single_pund_duration = (pre_baseline +
+    single_pund_duration = (init_hold +
                             2*reset_rise_time + reset_width + gap_after_reset +
-                            positive_pulse_duration +
-                            (gap_between_pos + positive_pulse_duration if include_second_pulse else 0.0) +
-                            post_baseline)
+                            2*(2*pos_rise_time + pos_width) + gap_between_pos + gap_pos_to_neg +
+                            2*(2*neg_rise_time + neg_width) + gap_between_neg +
+                            final_hold)
 
     return single_pund, single_pund_duration, max_amplitude
 
@@ -314,38 +323,45 @@ def plot_pund_waveform(waveform, total_duration_s, total_pund_time, single_pund_
              marker='o', markersize=3, markevery=max(1, first_pund_points//50))
     ax2.set_xlabel('Time (µs)', fontsize=12)
     ax2.set_ylabel('Voltage (V)', fontsize=12)
-    ax2.set_title(f'Zoomed: First Optimized Sequence ({single_pund_duration*1e9:.1f} ns, {first_pund_points} points)',  # CHANGED (beamtime_20261019)
+    ax2.set_title(f'Zoomed: First PUND Sequence ({single_pund_duration*1e9:.1f} ns, {first_pund_points} points)',
                   fontsize=14, fontweight='bold')
     ax2.grid(True, alpha=0.3)
     ax2.axhline(y=voltage_offset_v, color='purple', linestyle='--', linewidth=1,
                 label=f'Offset / idle level ({voltage_offset_v:.2f} V)')
     ax2.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
 
-    # CHANGED (beamtime_20261019): timing follows the optimized sequence
-    # (reset, P, optional U; no N/D). Also records each optimized rise onset.
+    # Pulse center timing
     print("\n=== Pulse Timing Calculation ===")
     t = 0.0
-    t += pre_baseline
+    t += init_hold
 
     t += reset_rise_time
     reset_center = t + reset_width / 2
     t += reset_width + reset_rise_time
     t += gap_after_reset
 
-    pos1_rise_start = t
-    t += opt_rise_time
+    pos1_rise_start = t  # CHANGED (beamtime_20261019): optimized rise onset of P
+    t += pos_rise_time
     pos1_center = t + pos_width / 2
-    t += pos_width + pos_fall_time
+    t += pos_width + pos_rise_time
+    t += gap_between_pos
 
-    pos2_rise_start = pos2_center = None
-    if include_second_pulse:
-        t += gap_between_pos
-        pos2_rise_start = t
-        t += opt_rise_time
-        pos2_center = t + pos_width / 2
-        t += pos_width + pos_fall_time
+    pos2_rise_start = t  # CHANGED (beamtime_20261019): optimized rise onset of U
+    t += pos_rise_time
+    pos2_center = t + pos_width / 2
+    t += pos_width + pos_rise_time
+    t += gap_pos_to_neg
 
-    t += post_baseline
+    t += neg_rise_time
+    neg1_center = t + neg_width / 2
+    t += neg_width + neg_rise_time
+    t += gap_between_neg
+
+    t += neg_rise_time
+    neg2_center = t + neg_width / 2
+    t += neg_width + neg_rise_time
+
+    t += final_hold
 
     print(f"Total time calculated: {t*1e9:.1f} ns ({t*1e6:.3f} µs)")
     print(f"Expected PUND duration: {single_pund_duration*1e9:.1f} ns ({single_pund_duration*1e6:.3f} µs)")
@@ -354,26 +370,28 @@ def plot_pund_waveform(waveform, total_duration_s, total_pund_time, single_pund_
     else:
         print(f"⚠ Times don't match (difference {abs(single_pund_duration - t)*1e9:.1f} ns)")
 
-    # CHANGED (beamtime_20261019): reset / P / U only, plus optimized rise onsets
     print(f"\nPulse Center Times (µs):")
     print(f"  Reset:  {reset_center*1e6:.3f}")
-    print(f"  P:      {pos1_center*1e6:.3f}  (optimized rise starts at {pos1_rise_start*1e6:.3f})")
-    if include_second_pulse:
-        print(f"  U:      {pos2_center*1e6:.3f}  (optimized rise starts at {pos2_rise_start*1e6:.3f})")
+    print(f"  Pos1:   {pos1_center*1e6:.3f}  (optimized rise starts at {pos1_rise_start*1e6:.3f})")
+    print(f"  Pos2:   {pos2_center*1e6:.3f}  (optimized rise starts at {pos2_rise_start*1e6:.3f})")
+    print(f"  Neg1:   {neg1_center*1e6:.3f}")
+    print(f"  Neg2:   {neg2_center*1e6:.3f}")
     print("="*50)
 
+    # CHANGED (beamtime_20261019): offset scaled to the actual peak (was 0.25 x
+    # the largest pulse amplitude) so labels stay inside the axes
     label_offset = max_amplitude * 0.1
 
     annotations = [
         (reset_center, reset_amplitude + voltage_offset_v - label_offset, 'Reset', 'red', 'lightcoral'),
-        (pos1_center,  pos_amplitude  + voltage_offset_v + label_offset, 'P (opt)', 'green', 'lightgreen'),
+        (pos1_center,  pos_amplitude  + voltage_offset_v + label_offset, 'P', 'green', 'lightgreen'),
+        (pos2_center,  pos_amplitude  + voltage_offset_v + label_offset, 'U', 'green', 'lightgreen'),
+        (neg1_center,  neg_amplitude  + voltage_offset_v - label_offset, 'N', 'orange', 'lightyellow'),
+        (neg2_center,  neg_amplitude  + voltage_offset_v - label_offset, 'D', 'orange', 'lightyellow'),
     ]
-    if include_second_pulse:
-        annotations.append(
-            (pos2_center, pos_amplitude + voltage_offset_v + label_offset, 'U (opt)', 'green', 'lightgreen'))
+    # CHANGED (beamtime_20261019): shade the optimized rise windows of P and U
     for rise_start in (pos1_rise_start, pos2_rise_start):
-        if rise_start is not None:
-            ax2.axvspan(rise_start*1e6, (rise_start + opt_rise_time)*1e6, alpha=0.15, color='green')
+        ax2.axvspan(rise_start*1e6, (rise_start + pos_rise_time)*1e6, alpha=0.15, color='green')
     for center, y, label, color, face in annotations:
         ax2.axvline(x=center*1e6, color=color, linestyle=':', linewidth=1.5, alpha=0.7)
         ax2.text(center*1e6, y, label, fontsize=9, ha='center', color=color, fontweight='bold',
@@ -409,8 +427,8 @@ def setup_awg(waveform, max_amplitude):
             f"|Offset| ({abs(voltage_offset_v):.3f} V) + peak amplitude ({max_amplitude:.3f} V) "
             f"= {abs(voltage_offset_v) + max_amplitude:.3f} V exceeds the {max_allowed_amplitude_v} V limit"
         )
-    
-    arb_name = "OPT_BURST"    # CHANGED (beamtime_20261019): was "PUND_BURST". Must be 12 characters or fewer
+
+    arb_name = "OPT_PUND"     # CHANGED (beamtime_20261019): was "PUND_BURST". Must be 12 characters or fewer
     if len(arb_name) > 12:
         raise ValueError(f"Arb name '{arb_name}' is longer than 12 characters")
 
@@ -509,8 +527,7 @@ def turn_off_awg():
 def main():
     """Main function to build, plot, and/or upload PUND burst waveform."""
     print("="*60)
-    # CHANGED (beamtime_20261019): summary prints describe the optimized sequence
-    print("BO-Optimized Burst Waveform Generator (Binary Upload, Ext Triggered)")
+    print("PUND Burst Waveform Generator (Binary Upload, Ext Triggered)")
     print("="*60)
 
     try:
@@ -523,23 +540,25 @@ def main():
     print(f"  DC offset: {voltage_offset_v:.3f} V (idle level between bursts)")
     print(f"  Output range: {voltage_offset_v - max_amplitude:.3f} V to {voltage_offset_v + max_amplitude:.3f} V")
     print(f"  Reset pulse: {reset_amplitude:.2f} V, {reset_width*1e6:.3f} µs width, {reset_rise_time*1e9:.1f} ns rise/fall")
-    print(f"  Optimized rise: {opt_rise_knots_v.size} knots over {opt_rise_time*1e9:.1f} ns, "
-          f"{int(round(opt_rise_time * arb_sample_rate_hz))} samples")
-    print(f"    knots (V): " + ", ".join(f"{v:.4f}" for v in opt_rise_knots_v))
-    print(f"  Positive pulse{'s (P, U)' if include_second_pulse else ' (P only)'}: flat top {pos_amplitude:.2f} V, "
-          f"{pos_width*1e6:.3f} µs width, {pos_fall_time*1e9:.1f} ns fall")
-    print(f"\nGaps / baselines:")
-    print(f"  Pre-baseline: {pre_baseline*1e6:.3f} µs")
+    # CHANGED (beamtime_20261019): positive pulses use the optimized rise
+    print(f"  Positive pulses: {pos_amplitude:.2f} V, {pos_width*1e6:.3f} µs width, "
+          f"{pos_rise_time*1e9:.1f} ns OPTIMIZED rise ({opt_rise_knots_v.size} knots) / linear fall")
+    print(f"    rise knots (V): " + ", ".join(f"{v:.4f}" for v in opt_rise_knots_v))
+    print(f"  Negative pulses: {neg_amplitude:.2f} V, {neg_width*1e6:.3f} µs width, {neg_rise_time*1e9:.1f} ns rise/fall")
+    print(f"\nGaps:")
     print(f"  After reset: {gap_after_reset*1e6:.3f} µs")
-    if include_second_pulse:
-        print(f"  Between positive pulses: {gap_between_pos*1e6:.3f} µs")
-    print(f"  Post-baseline: {post_baseline*1e6:.3f} µs")
+    print(f"  Between positive pulses: {gap_between_pos*1e6:.3f} µs")
+    print(f"  Positive to negative: {gap_pos_to_neg*1e6:.3f} µs")
+    print(f"  Between negative pulses: {gap_between_neg*1e6:.3f} µs")
     if num_pund_repeats > 1:
-        print(f"  Between sequences: {gap_between_punds*1e6:.1f} µs")
+        print(f"  Between PUND sequences: {gap_between_punds*1e6:.1f} µs")
+    print(f"\nHolds:")
+    print(f"  Initial hold: {init_hold*1e9:.1f} ns")
+    print(f"  Final hold: {final_hold*1e9:.1f} ns")
     print(f"\nRepetition / Triggering:")
-    print(f"  Sequences per trigger: {num_pund_repeats}")
-    print(f"  Single sequence duration: {single_pund_duration*1e6:.3f} µs")
-    print(f"  Total sequence time: {total_pund_time*1e3:.4f} ms")
+    print(f"  PUNDs per trigger: {num_pund_repeats}")
+    print(f"  Single PUND duration: {single_pund_duration*1e6:.3f} µs")
+    print(f"  Total PUND time: {total_pund_time*1e3:.4f} ms")
     print(f"  Zero section (auto-calculated): {zero_duration*1e3:.3f} ms")
     print(f"  Trigger period: {target_period*1e3:.3f} ms ({1/target_period:.1f} Hz, external)")
     print(f"  Trigger margin: {trigger_margin*1e3:.3f} ms")
